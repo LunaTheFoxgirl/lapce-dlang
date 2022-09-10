@@ -119,24 +119,24 @@ fn initialize(params: InitializeParams) -> Result<()> {
     let server_path = Url::parse(&volt_uri)?.join("serve-d")?;
     let verfile = PathBuf::from(format!("{0}/{1}", server_path, "version.txt"));
 
-    let mut should_update: bool = false;
+    let mut should_update: bool;
 
     // Create server path if it doesn't already exist
     if !PathBuf::from(server_path.as_str()).exists() {
-        create_dir_all(server_path.as_str());
+        create_dir_all(server_path.as_str())?;
         should_update = true;
 
         // Create version file (it definitely doesn't exist)
-        fs::write(verfile.clone(), asset.tag_name.clone());
+        fs::write(&verfile, &asset.tag_name)?;
     } else {
         if verfile.exists() {
             // Get version from file if there is one
-            let ver = String::from_utf8(fs::read(verfile.clone())?)?;
+            let ver = String::from_utf8(fs::read(&verfile)?)?;
             installed_version = semver::Version::parse(ver.as_str())?;
         }
 
         // Write the new version we want.
-        fs::write(verfile.clone(), asset.tag_name.clone());
+        fs::write(&verfile, &asset.tag_name)?;
 
         // Set should_update based on whether the version on git is newer
         should_update = installed_version > semver::Version::parse(asset.tag_name.as_str())?;
@@ -175,11 +175,11 @@ fn initialize(params: InitializeParams) -> Result<()> {
             "zip" => {
                 let mut archive =
                     ZipArchive::new(Cursor::new(archive_buf)).expect("Failed to open zip archive");
-                archive.extract(server_path.as_str());
+                archive.extract(server_path.as_str())?;
             }
             "tar.xz" => {
                 let mut archive = Archive::new(Cursor::new(archive_buf));
-                archive.unpack(server_path.as_str());
+                archive.unpack(server_path.as_str())?;
             }
             _ => {}
         }
