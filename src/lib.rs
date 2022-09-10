@@ -22,7 +22,7 @@ struct State {}
 
 register_plugin!(State);
 
-const LANGUAGE_ID: &str = "d";
+const LANGUAGE_ID: &str = "dlang";
 
 #[derive(Serialize, Deserialize)]
 struct GHAsset {

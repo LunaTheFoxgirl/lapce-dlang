@@ -3,9 +3,4 @@ version = "1.0.0"
 author = "Luna the Foxgirl"
 display-name = "DLang"
 description = "DLang support for Lapce"
-
-# for non-theme plugins
 wasm = "lapce-dlang.wasm"
-
-# for theme plugins
-# themes = ["theme-one.toml", "theme-two.toml", "theme-three.toml"]
