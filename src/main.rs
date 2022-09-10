@@ -22,7 +22,7 @@ struct State {}
 
 register_plugin!(State);
 
-const LANGUAGE_ID: &str = "dlang";
+const LANGUAGE_ID: &str = "d";
 
 #[derive(Serialize, Deserialize)]
 struct GHAsset {
@@ -116,14 +116,14 @@ fn initialize(params: InitializeParams) -> Result<()> {
 
     // Plugin working directory
     let volt_uri = VoltEnvironment::uri()?;
-    let server_path = Url::parse(&volt_uri)?.join("serve-d")?;
-    let verfile = PathBuf::from(format!("{0}/{1}", server_path, "version.txt"));
+    let server_path = Url::parse(&volt_uri)?.join(exec_file.as_str())?;
+    let verfile = PathBuf::from(format!("{0}/{1}", volt_uri, "version.txt"));
 
     let mut should_update: bool;
 
     // Create server path if it doesn't already exist
-    if !PathBuf::from(server_path.as_str()).exists() {
-        create_dir_all(server_path.as_str())?;
+    if !PathBuf::from(volt_uri.as_str()).exists() {
+        create_dir_all(volt_uri.as_str())?;
         should_update = true;
 
         // Create version file (it definitely doesn't exist)
@@ -175,11 +175,11 @@ fn initialize(params: InitializeParams) -> Result<()> {
             "zip" => {
                 let mut archive =
                     ZipArchive::new(Cursor::new(archive_buf)).expect("Failed to open zip archive");
-                archive.extract(server_path.as_str())?;
+                archive.extract(volt_uri.as_str())?;
             }
             "tar.xz" => {
                 let mut archive = Archive::new(Cursor::new(archive_buf));
-                archive.unpack(server_path.as_str())?;
+                archive.unpack(volt_uri.as_str())?;
             }
             _ => {}
         }
@@ -188,7 +188,7 @@ fn initialize(params: InitializeParams) -> Result<()> {
     // Available language IDs
     // https://github.com/lapce/lapce/blob/HEAD/lapce-proxy/src/buffer.rs#L173
     PLUGIN_RPC.start_lsp(
-        Url::parse(exec_file.as_str())?,
+        server_path,
         server_args,
         LANGUAGE_ID,
         params.initialization_options,
