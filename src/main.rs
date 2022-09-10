@@ -1,4 +1,9 @@
-use anyhow::Result;
+use std::{
+    fs::{self, create_dir_all},
+    path::PathBuf,
+};
+
+use anyhow::{Error, Result};
 use lapce_plugin::{
     psp_types::{
         lsp_types::{request::Initialize, InitializeParams, Url},
@@ -6,17 +11,38 @@ use lapce_plugin::{
     },
     register_plugin, LapcePlugin, VoltEnvironment, PLUGIN_RPC,
 };
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::io::Cursor;
+use tar_wasi::Archive;
+use zip::ZipArchive;
 
 #[derive(Default)]
 struct State {}
 
 register_plugin!(State);
 
-const LANGUAGE_ID: &str = "language_id";
+const LANGUAGE_ID: &str = "dlang";
+
+#[derive(Serialize, Deserialize)]
+struct GHAsset {
+    tag_name: String,
+    assets: Vec<GHReleaseAsset>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct GHReleaseAsset {
+    id: isize,
+    name: String,
+    size: isize,
+    download_count: isize,
+    browser_download_url: String,
+    created_at: String,
+}
 
 fn initialize(params: InitializeParams) -> Result<()> {
-    let mut server_args = vec![];
+    let mut server_args = vec!["--require".to_string(), "d".to_string()];
+    let mut installed_version = semver::Version::parse("v0.0.0")?;
 
     // Check for user specified LSP server path
     // ```
@@ -36,6 +62,7 @@ fn initialize(params: InitializeParams) -> Result<()> {
                 }
             }
 
+            // Allow starting specific LSP
             if let Some(server_path) = lsp.get("serverPath") {
                 if let Some(server_path) = server_path.as_str() {
                     if !server_path.is_empty() {
@@ -52,41 +79,116 @@ fn initialize(params: InitializeParams) -> Result<()> {
         }
     }
 
+    PLUGIN_RPC.stderr("AAAAAAAA");
+
+    // Fetch asset from github to check version
+    let asset: GHAsset = serde_json::from_str(
+        String::from_utf8(
+            lapce_plugin::Http::get("https://api.github.com/repos/Pure-D/serve-d/releases/latest")?
+                .body_read_all()?,
+        )?
+        .as_str(),
+    )?;
+
     // Architecture check
-    let _ = match VoltEnvironment::architecture().as_deref() {
+    let arch_name = match VoltEnvironment::architecture().as_deref() {
         Ok("x86_64") => "x86_64",
-        Ok("aarch64") => "aarch64",
-        _ => return Ok(()),
+        Ok("aarch64") => "arm64",
+        _ => return Err(Error::msg("Unsupported architecture")),
     };
 
     // OS check
-    let _ = match VoltEnvironment::operating_system().as_deref() {
+    let os_name = match VoltEnvironment::operating_system().as_deref() {
         Ok("macos") => "macos",
         Ok("linux") => "linux",
         Ok("windows") => "windows",
-        _ => return Ok(()),
+        _ => return Err(Error::msg("Unsupported platform")),
     };
-
-    // Download URL
-    // let _ = format!("https://github.com/<name>/<project>/releases/download/<version>/{filename}");
 
     // see lapce_plugin::Http for available API to download files
 
-    let _ = match VoltEnvironment::operating_system().as_deref() {
+    let exec_file = match VoltEnvironment::operating_system().as_deref() {
         Ok("windows") => {
-            format!("{}.exe", "[filename]")
+            format!("{}.exe", "serve-d")
         }
-        _ => "[filename]".to_string(),
+        _ => "serve-d".to_string(),
     };
 
     // Plugin working directory
     let volt_uri = VoltEnvironment::uri()?;
-    let server_path = Url::parse(&volt_uri)?.join("[filename]")?;
+    let server_path = Url::parse(&volt_uri)?.join("serve-d")?;
+    let verfile = PathBuf::from(format!("{0}/{1}", server_path, "version.txt"));
+
+    let mut should_update: bool = false;
+
+    // Create server path if it doesn't already exist
+    if !PathBuf::from(server_path.as_str()).exists() {
+        create_dir_all(server_path.as_str());
+        should_update = true;
+
+        // Create version file (it definitely doesn't exist)
+        fs::write(verfile.clone(), asset.tag_name.clone());
+    } else {
+        if verfile.exists() {
+            // Get version from file if there is one
+            let ver = String::from_utf8(fs::read(verfile.clone())?)?;
+            installed_version = semver::Version::parse(ver.as_str())?;
+        }
+
+        // Write the new version we want.
+        fs::write(verfile.clone(), asset.tag_name.clone());
+
+        // Set should_update based on whether the version on git is newer
+        should_update = installed_version > semver::Version::parse(asset.tag_name.as_str())?;
+    }
+
+    if should_update {
+        let ext = if os_name == "windows" {
+            "zip"
+        } else {
+            "tar.xz"
+        };
+
+        // Calculate download url
+        let download_url = format!(
+            "https://github.com/Pure-D/serve-d/releases/download/{0}/serve-d_{0}-{1}-{2}.{3}",
+            asset.tag_name.clone(),
+            arch_name,
+            os_name,
+            ext
+        );
+
+        // Try fetching the archive
+        let mut resp = lapce_plugin::Http::get(download_url.as_str())?;
+        if resp.status_code != 200 {
+            return Err(Error::msg(format!(
+                "Fetching archive failed with error {}",
+                resp.status_code
+            )));
+        }
+
+        // Archive buffer
+        let archive_buf = resp.body_read_all()?;
+
+        // Extract zip or tar archive
+        match ext {
+            "zip" => {
+                let mut archive =
+                    ZipArchive::new(Cursor::new(archive_buf)).expect("Failed to open zip archive");
+                archive.extract(server_path.as_str());
+            }
+            "tar.xz" => {
+                let mut archive = Archive::new(Cursor::new(archive_buf));
+                archive.unpack(server_path.as_str());
+            }
+            _ => {}
+        }
+    }
 
     // Available language IDs
     // https://github.com/lapce/lapce/blob/HEAD/lapce-proxy/src/buffer.rs#L173
     PLUGIN_RPC.start_lsp(
-        server_path,
+        Url::parse(exec_file.as_str())?,
         server_args,
         LANGUAGE_ID,
         params.initialization_options,
