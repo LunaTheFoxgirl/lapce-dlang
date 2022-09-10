@@ -108,9 +108,7 @@ fn initialize(params: InitializeParams) -> Result<()> {
     // see lapce_plugin::Http for available API to download files
 
     let exec_file = match VoltEnvironment::operating_system().as_deref() {
-        Ok("windows") => {
-            format!("{}.exe", "serve-d")
-        }
+        Ok("windows") => "serve-d.exe".to_string(),
         _ => "serve-d".to_string(),
     };
 
